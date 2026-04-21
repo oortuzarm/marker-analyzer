@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marker Analyzer — LookiAR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── NAV ─────────────────────────────────────────── -->
+<nav>
+  <a href="https://www.lookiar.com/" target="_blank" class="nav-logo">
+    <img src="https://www.lookiar.com/assets/lookiar-iso-268f05ba778b1c0e19e308ada48cad14e18e93a496ad689b0e6b64cf872e5033.svg"
+         alt="LookiAR" onerror="this.style.display='none'">
+    <span class="nav-logo-text">LookiAR</span>
+  </a>
+  <div class="nav-right-group">
+    <span class="nav-badge">Marker Analyzer</span>
+    <a href="https://www.lookiar.com/" target="_blank" class="nav-cta">PRUÉBALO GRATIS</a>
+  </div>
+</nav>
+
+<!-- ════════════════════════════════════════════════════
+     PANTALLA 1 — UPLOAD
+════════════════════════════════════════════════════ -->
+<div id="screenUpload" class="screen visible">
+
+  <div class="hero">
+    <div class="tool-tag">Herramienta gratuita · WebAR</div>
+    <h1>Analiza tu imagen <span>antes de subirla</span><br>a Lookiar</h1>
+    <p>Score de calidad de tracking, heatmap visual y recomendaciones de mejora — todo en tu navegador, sin subir archivos a ningún servidor.</p>
+  </div>
+
+  <div class="wrap">
+    <div class="dropzone" id="dropZone">
+      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" hidden>
+      <div class="dico">🖼</div>
+      <h3>Arrastra tu imagen de marcador aquí</h3>
+      <p>o haz clic para seleccionar desde tu dispositivo</p>
+      <div class="hint">JPG · PNG · WEBP — Máx. 15 MB</div>
+      <button class="pick-btn" id="btnSelect">Elegir imagen</button>
+    </div>
+
+    <div class="feat-row">
+      <div class="feat-item">
+        <div class="feat-icon">
+          <svg viewBox="0 0 22 22" fill="none" width="18" height="18">
+            <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M11 7v4.5l3 1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="feat-title">Score 0–100</div>
+          <div class="feat-sub">Calidad de tracking AR</div>
+        </div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-icon">
+          <svg viewBox="0 0 22 22" fill="none" width="18" height="18">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" fill="currentColor" opacity=".9"/>
+            <rect x="12" y="2" width="8" height="8" rx="1.5" fill="currentColor" opacity=".5"/>
+            <rect x="2" y="12" width="8" height="8" rx="1.5" fill="currentColor" opacity=".3"/>
+            <rect x="12" y="12" width="8" height="8" rx="1.5" fill="currentColor" opacity=".8"/>
+          </svg>
+        </div>
+        <div>
+          <div class="feat-title">Heatmap visual</div>
+          <div class="feat-sub">Zonas fuertes y débiles</div>
+        </div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-icon">
+          <svg viewBox="0 0 22 22" fill="none" width="18" height="18">
+            <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M11 8v3.5M11 14.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="feat-title">Diagnóstico claro</div>
+          <div class="feat-sub">En lenguaje simple</div>
+        </div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-icon">
+          <svg viewBox="0 0 22 22" fill="none" width="18" height="18">
+            <path d="M11 2l2.2 4.4 4.8.7-3.5 3.4.8 4.8L11 13.1 6.7 15.3l.8-4.8L4 7.1l4.8-.7L11 2z"
+              stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="feat-title">Imagen mejorada</div>
+          <div class="feat-sub">Descarga versión optimizada</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /screenUpload -->
+
+<!-- ════════════════════════════════════════════════════
+     PANTALLA 2 — LOADING
+════════════════════════════════════════════════════ -->
+<div id="screenLoading" class="screen">
+  <div class="wrap">
+    <div class="card">
+      <div class="sth">
+        <div class="spin"></div>
+        <div>
+          <div class="sstep">Analizando imagen</div>
+          <div class="stxt" id="loadingStatus">Detectando puntos de tracking…</div>
+        </div>
+      </div>
+      <div class="pbar-wrap"><div class="pbar-indeterminate"></div></div>
+    </div>
+  </div>
+</div><!-- /screenLoading -->
+
+<!-- ════════════════════════════════════════════════════
+     PANTALLA 3 — RESULTADOS
+════════════════════════════════════════════════════ -->
+<div id="screenResults" class="screen">
+  <div class="wrap results-wrap">
+
+    <!-- Topbar -->
+    <div class="res-topbar">
+      <button class="btn-back" id="btnBack">
+        <svg viewBox="0 0 20 20" fill="none" width="14" height="14">
+          <path d="M13 15l-5-5 5-5" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Analizar otra imagen
+      </button>
+      <span class="res-filename" id="resFilename"></span>
+    </div>
+
+    <!-- Score + Métricas -->
+    <div class="top-row">
+
+      <div class="card score-card">
+        <div class="card-title">Score de tracking</div>
+        <div class="score-ring-wrap">
+          <svg class="score-ring" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="50" fill="none" stroke="#0d2035" stroke-width="10"/>
+            <circle id="scoreArc" cx="60" cy="60" r="50" fill="none"
+              stroke="#22c55e" stroke-width="10"
+              stroke-dasharray="0 315"
+              stroke-linecap="round"
+              transform="rotate(-90 60 60)"/>
+          </svg>
+          <div class="score-inner">
+            <span class="score-num" id="scoreNum">--</span>
+            <span class="score-den">/100</span>
+          </div>
+        </div>
+        <div class="score-label" id="scoreLabel">—</div>
+      </div>
+
+      <div class="card metrics-card">
+        <div class="card-title">Análisis detallado</div>
+        <div class="kp-stat">
+          <span class="kp-count" id="kpCount">--</span>
+          <span class="kp-label">keypoints detectados</span>
+        </div>
+        <div class="kp-sub" id="kpSub"></div>
+
+        <div class="mbar-list">
+          <div class="mbar-row">
+            <span class="mbar-name">Distribución</span>
+            <div class="mbar"><div class="mbar-fill" id="barDist"></div></div>
+            <span class="mbar-val" id="valDist">--</span>
+          </div>
+          <div class="mbar-row">
+            <span class="mbar-name">Contraste</span>
+            <div class="mbar"><div class="mbar-fill" id="barContrast"></div></div>
+            <span class="mbar-val" id="valContrast">--</span>
+          </div>
+          <div class="mbar-row">
+            <span class="mbar-name">Textura / bordes</span>
+            <div class="mbar"><div class="mbar-fill" id="barTexture"></div></div>
+            <span class="mbar-val" id="valTexture">--</span>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /top-row -->
+
+    <!-- Viewer -->
+    <div class="card viewer-card">
+      <div class="viewer-header">
+        <div class="card-title" style="margin-bottom:0">Visualización</div>
+        <div class="viewer-tabs">
+          <button class="vtab active" data-mode="heatmap">
+            <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+              <rect x="1" y="1" width="6" height="6" rx="1" fill="currentColor" opacity=".9"/>
+              <rect x="9" y="1" width="6" height="6" rx="1" fill="currentColor" opacity=".5"/>
+              <rect x="1" y="9" width="6" height="6" rx="1" fill="currentColor" opacity=".3"/>
+              <rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor" opacity=".8"/>
+            </svg>
+            Heatmap
+          </button>
+          <button class="vtab" data-mode="original">
+            <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+              <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
+              <circle cx="5.5" cy="5.5" r="1.5" fill="currentColor"/>
+              <path d="M1 12l4-4 2.5 2.5L11 6l4 5" stroke="currentColor"
+                stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Original
+          </button>
+          <button class="vtab" data-mode="improved">
+            <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+              <path d="M8 1.5l1.6 3.2 3.5.5-2.5 2.4.6 3.6L8 9.6 4.8 11.2l.6-3.6-2.5-2.4 3.5-.5L8 1.5z"
+                stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+            </svg>
+            Antes / Después
+          </button>
+        </div>
+      </div>
+
+      <div class="viewer-body">
+        <canvas id="displayCanvas"></canvas>
+      </div>
+
+      <div class="viewer-footer" id="heatLegend">
+        <div class="legend-row">
+          <div class="leg-item"><span class="leg-dot" style="background:#ef4444"></span>Sin tracking</div>
+          <div class="leg-item"><span class="leg-dot" style="background:#eab308"></span>Débil</div>
+          <div class="leg-item"><span class="leg-dot" style="background:#22c55e"></span>Fuerte</div>
+        </div>
+        <label class="opacity-ctrl">
+          Opacidad
+          <input type="range" id="opacitySlider" min="20" max="95" value="60">
+        </label>
+      </div>
+    </div><!-- /viewer-card -->
+
+    <!-- Diagnóstico + Recomendaciones -->
+    <div class="insight-row">
+      <div class="card">
+        <div class="card-title">Tu imagen en resumen</div>
+        <span class="diag-badge" id="diagBadge"></span>
+        <p id="diagText"></p>
+      </div>
+      <div class="card">
+        <div class="card-title">Cómo mejorar tu resultado</div>
+        <ul id="recoList"></ul>
+      </div>
+    </div>
+
+    <!-- Acciones -->
+    <div class="actions-row">
+      <button class="btn-action" id="btnDlHeatmap">
+        <svg viewBox="0 0 18 18" fill="none" width="13" height="13">
+          <path d="M9 2v9M5 8l4 4 4-4M3 14h12"
+            stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Descargar heatmap
+      </button>
+      <button class="btn-action" id="btnDlImproved">
+        <svg viewBox="0 0 18 18" fill="none" width="13" height="13">
+          <path d="M9 2v9M5 8l4 4 4-4M3 14h12"
+            stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Descargar imagen mejorada
+      </button>
+      <button class="btn-cta" id="btnLookiar">
+        Continuar en Lookiar
+        <svg viewBox="0 0 18 18" fill="none" width="13" height="13">
+          <path d="M4 9h10M10 5l4 4-4 4"
+            stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+
+  </div><!-- /results-wrap -->
+</div><!-- /screenResults -->
+
+<!-- ── FOOTER ─────────────────────────────────────── -->
+<footer>
+  <div class="foot-inner">
+    <a href="https://www.lookiar.com/" target="_blank" class="foot-logo">
+      <img src="https://www.lookiar.com/assets/lookiar-iso-268f05ba778b1c0e19e308ada48cad14e18e93a496ad689b0e6b64cf872e5033.svg"
+           alt="LookiAR" onerror="this.style.display='none'">
+      <span>LookiAR</span>
+    </a>
+    <div class="foot-info">
+      Impulsa tus proyectos con Realidad Aumentada<br>
+      <a href="https://www.lookiar.com/" target="_blank">www.lookiar.com</a>
+      &nbsp;·&nbsp;Santiago, Chile
+    </div>
+  </div>
+  <p class="foot-note">
+    Herramienta gratuita de LookiAR · Análisis 100% local, tu imagen nunca abandona tu dispositivo ·
+    © 2026 LookiAR
+  </p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
