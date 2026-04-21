@@ -317,6 +317,7 @@ nav{
   color:var(--brand);border-color:var(--brand);
   background:var(--brand-dim);
 }
+.viewer-subtitle{font-size:.78rem;color:var(--text-muted);line-height:1.5;margin-top:2px}
 .viewer-body{
   background:#040c18;
   min-height:180px;

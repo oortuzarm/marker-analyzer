@@ -3,32 +3,27 @@
    Pure-JS browser pipeline — no backend, no OpenCV dependency
    ═══════════════════════════════════════════════════════════════ */
 
-const MAX_DIM  = 512;               // working resolution (px)
-const CIRC     = 2 * Math.PI * 50;  // SVG arc circumference (r=50 → ≈314.16)
+const MAX_DIM = 512;
+const CIRC    = 2 * Math.PI * 50; // SVG arc circumference ≈ 314.16
 
-/* ── State ─────────────────────────────────────────────────────── */
 let state = {
-  heatmapCanvas:  null,   // canvas with original + overlay references
-  improvedCanvas: null,   // canvas with sharpened + contrast-stretched image
-  scores:         null,   // { sharpness, features, distribution, contrast, total, kp }
-  currentMode:    'heatmap',
-  opacity:        0.60,
+  heatmapCanvas: null,
+  scores:        null,
+  opacity:       0.60,
 };
 
 /* ── DOMContentLoaded ──────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-  // Pure JS — no OpenCV needed, hide loading banner and enable button immediately
   const banner = document.getElementById('cvBanner');
   if (banner) banner.hidden = true;
   document.getElementById('btnSelect').disabled = false;
 
   setupUploadZone();
-  setupTabs();
   setupDownloads();
 
   document.getElementById('opacitySlider').addEventListener('input', e => {
     state.opacity = e.target.value / 100;
-    if (state.currentMode === 'heatmap') renderCanvas('heatmap');
+    renderCanvas();
   });
 
   document.getElementById('btnBack').addEventListener('click', resetToUpload);
@@ -73,7 +68,6 @@ function loadFile(file) {
   img.onload = () => {
     URL.revokeObjectURL(url);
     document.getElementById('resFilename').textContent = file.name;
-    // yield to browser so the loading screen actually paints before heavy work
     setTimeout(() => runAnalysis(img), 60);
   };
   img.onerror = () => {
@@ -97,8 +91,7 @@ function setStatus(msg) {
 
 function resetToUpload() {
   document.getElementById('fileInput').value = '';
-  state = { heatmapCanvas: null, improvedCanvas: null, scores: null,
-            currentMode: 'heatmap', opacity: 0.60 };
+  state = { heatmapCanvas: null, scores: null, opacity: 0.60 };
   showScreen('upload');
 }
 
@@ -108,7 +101,6 @@ function resetToUpload() {
 const tick = () => new Promise(r => requestAnimationFrame(r));
 
 async function runAnalysis(img) {
-  // Scale to working resolution
   const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
   const aw = Math.round(img.width  * scale);
   const ah = Math.round(img.height * scale);
@@ -123,25 +115,23 @@ async function runAnalysis(img) {
   const gray = toGrayscale(imageData.data, aw, ah);
 
   setStatus('Calculando gradientes de imagen…'); await tick();
-  const blurred     = gaussBlur(gray, aw, ah, 1.0);
+  const blurred      = gaussBlur(gray, aw, ah, 1.0);
   const { gx, gy, mag } = sobel(blurred, aw, ah);
 
   setStatus('Detectando esquinas y puntos de tracking…'); await tick();
   const harris = harrisResponse(gx, gy, aw, ah);
   const localV = localVariance(gray, aw, ah, 4);
 
-  setStatus('Generando mapa de trackabilidad…'); await tick();
+  setStatus('Generando mapa de densidad de features…'); await tick();
   const trackMap = buildTrackMap(harris, mag, localV, aw, ah);
 
   setStatus('Calculando score de calidad…'); await tick();
-  const scores = computeScores(gray, mag, harris, trackMap, aw, ah);
+  const keypoints = extractKeypoints(harris, aw, ah);
+  const scores    = computeScores(gray, mag, harris, trackMap, keypoints, aw, ah);
   state.scores = scores;
 
   setStatus('Renderizando heatmap…'); await tick();
-  state.heatmapCanvas  = buildHeatmapCanvas(imageData, trackMap, aw, ah);
-
-  setStatus('Generando imagen mejorada…'); await tick();
-  state.improvedCanvas = buildImprovedCanvas(imageData, aw, ah);
+  state.heatmapCanvas  = buildHeatmapCanvas(imageData, trackMap, keypoints, aw, ah);
 
   displayResults(scores);
 }
@@ -150,7 +140,6 @@ async function runAnalysis(img) {
    IMAGE PROCESSING PRIMITIVES
    ════════════════════════════════════════════════════════════════ */
 
-/* Luminance-weighted grayscale */
 function toGrayscale(data, w, h) {
   const gray = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++)
@@ -158,7 +147,6 @@ function toGrayscale(data, w, h) {
   return gray;
 }
 
-/* Separable Gaussian blur */
 function gaussBlur(src, w, h, sigma) {
   const r    = Math.max(1, Math.ceil(3 * sigma));
   const size = 2 * r + 1;
@@ -189,25 +177,23 @@ function gaussBlur(src, w, h, sigma) {
   return out;
 }
 
-/* Sobel gradients + gradient magnitude */
 function sobel(gray, w, h) {
-  const gx = new Float32Array(w * h);
-  const gy = new Float32Array(w * h);
+  const gx  = new Float32Array(w * h);
+  const gy  = new Float32Array(w * h);
   const mag = new Float32Array(w * h);
-  const p = (y, x) => gray[y * w + x];
+  const p   = (y, x) => gray[y * w + x];
 
   for (let y = 1; y < h - 1; y++)
     for (let x = 1; x < w - 1; x++) {
       const dx = -p(y-1,x-1) + p(y-1,x+1) - 2*p(y,x-1) + 2*p(y,x+1) - p(y+1,x-1) + p(y+1,x+1);
       const dy = -p(y-1,x-1) - 2*p(y-1,x) - p(y-1,x+1) + p(y+1,x-1) + 2*p(y+1,x) + p(y+1,x+1);
-      const i = y * w + x;
+      const i  = y * w + x;
       gx[i] = dx; gy[i] = dy;
       mag[i] = Math.sqrt(dx*dx + dy*dy);
     }
   return { gx, gy, mag };
 }
 
-/* Harris corner detector R = det(M) − k·trace²(M) */
 function harrisResponse(gx, gy, w, h) {
   const Ix2  = new Float32Array(w * h);
   const Iy2  = new Float32Array(w * h);
@@ -232,7 +218,6 @@ function harrisResponse(gx, gy, w, h) {
   return R;
 }
 
-/* Local variance — measures texture richness */
 function localVariance(gray, w, h, r) {
   const out = new Float32Array(w * h);
   for (let y = r; y < h - r; y++)
@@ -249,7 +234,6 @@ function localVariance(gray, w, h, r) {
   return out;
 }
 
-/* Weighted blend of Harris + gradient magnitude + local variance → 0–1 map */
 function buildTrackMap(harris, mag, localV, w, h) {
   let maxH = 0, maxM = 0, maxV = 0;
   for (let i = 0; i < w * h; i++) {
@@ -264,7 +248,6 @@ function buildTrackMap(harris, mag, localV, w, h) {
            + 0.35 * (maxM > 0 ? mag[i]    / maxM : 0)
            + 0.20 * (maxV > 0 ? localV[i] / maxV : 0);
 
-  // Smooth for visually pleasant gradient heatmap
   const sigma    = Math.max(4, Math.min(w, h) / 30);
   const smoothed = gaussBlur(raw, w, h, sigma);
 
@@ -276,19 +259,67 @@ function buildTrackMap(harris, mag, localV, w, h) {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   SCORING  — each component contributes 0–25 pts, total 0–100
+   KEYPOINT EXTRACTION — proper NMS in 7px radius window
    ════════════════════════════════════════════════════════════════ */
-function computeScores(gray, mag, harris, trackMap, w, h) {
-  const sharpness    = scoreSharpness(gray, w, h);
-  const features     = scoreFeatures(harris, w, h);
-  const distribution = scoreDistribution(trackMap, w, h);
-  const contrast     = scoreContrast(gray, w, h);
-  const total        = Math.round(sharpness + features + distribution + contrast);
-  const kp           = estimateKeypoints(harris, w, h);
-  return { sharpness, features, distribution, contrast, total, kp };
+function extractKeypoints(harris, w, h) {
+  let maxH = 0;
+  for (let i = 0; i < w * h; i++) if (harris[i] > maxH) maxH = harris[i];
+  if (maxH === 0) return [];
+
+  const threshold = maxH * 0.05;
+  const NMS = 7;
+  const pts = [];
+
+  for (let y = NMS; y < h - NMS; y++) {
+    for (let x = NMS; x < w - NMS; x++) {
+      const val = harris[y * w + x];
+      if (val < threshold) continue;
+      let isMax = true;
+      outer: for (let dy = -NMS; dy <= NMS; dy++) {
+        for (let dx = -NMS; dx <= NMS; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (harris[(y + dy) * w + (x + dx)] >= val) { isMax = false; break outer; }
+        }
+      }
+      if (isMax) pts.push({ x, y, strength: val / maxH });
+    }
+  }
+  return pts;
 }
 
-/* Laplacian variance — proxy for image sharpness */
+/* ════════════════════════════════════════════════════════════════
+   SCORING
+   ════════════════════════════════════════════════════════════════ */
+function computeScores(gray, mag, harris, trackMap, keypoints, w, h) {
+  const sharpness = scoreSharpness(gray, w, h);          // 0–25
+  const features  = scoreFeatures(harris, w, h);          // 0–25
+  const contrast  = scoreContrast(gray, w, h);            // 0–25
+  const distData  = analyzeDistribution(trackMap, w, h);  // object
+  const distribution = distData.score;                    // 0–25
+
+  // Coverage penalty: multiplier 0.55–1.0 applied to total
+  // Images with large empty areas are penalized even if their active zones are strong
+  const coveragePenalty = computeCoveragePenalty(distData.coverageRatio);
+
+  const raw   = sharpness + features + distribution + contrast;
+  const total = Math.round(Math.max(0, raw * coveragePenalty));
+
+  return {
+    sharpness,
+    features,
+    distribution,
+    contrast,
+    total,
+    kp:            keypoints.length,
+    coverageRatio: distData.coverageRatio,
+    gridScore:     distData.gridScore,
+    edgeScore:     distData.edgeScore,
+    goodCells:     distData.goodCells,
+    totalCells:    distData.totalCells,
+  };
+}
+
+/* Laplacian variance — proxy for sharpness / texture richness */
 function scoreSharpness(gray, w, h) {
   let sum = 0, sum2 = 0, n = 0;
   for (let y = 1; y < h - 1; y++)
@@ -297,8 +328,7 @@ function scoreSharpness(gray, w, h) {
       sum += lap; sum2 += lap*lap; n++;
     }
   const mean = sum / n;
-  const variance = sum2 / n - mean * mean;
-  return 25 * Math.min(1, variance / 1200);
+  return 25 * Math.min(1, (sum2 / n - mean * mean) / 1200);
 }
 
 /* Fraction of pixels with strong Harris response */
@@ -312,24 +342,6 @@ function scoreFeatures(harris, w, h) {
   return 25 * Math.min(1, count / (w * h) / 0.06);
 }
 
-/* How evenly trackable zones cover a 6×6 grid */
-function scoreDistribution(trackMap, w, h) {
-  const GRID = 6;
-  const cw = w / GRID, ch = h / GRID;
-  let covered = 0;
-  for (let gy = 0; gy < GRID; gy++)
-    for (let gx = 0; gx < GRID; gx++) {
-      let cellMax = 0;
-      const x0 = Math.floor(gx * cw), x1 = Math.floor((gx + 1) * cw);
-      const y0 = Math.floor(gy * ch), y1 = Math.floor((gy + 1) * ch);
-      for (let y = y0; y < y1; y++)
-        for (let x = x0; x < x1; x++)
-          if (trackMap[y * w + x] > cellMax) cellMax = trackMap[y * w + x];
-      if (cellMax > 0.2) covered++;
-    }
-  return 25 * (covered / (GRID * GRID));
-}
-
 /* Standard deviation of pixel luminance */
 function scoreContrast(gray, w, h) {
   let sum = 0;
@@ -340,99 +352,142 @@ function scoreContrast(gray, w, h) {
   return 25 * Math.min(1, Math.sqrt(sq / (w * h)) / 75);
 }
 
-/* Approximate keypoint count (Harris with implicit NMS) */
-function estimateKeypoints(harris, w, h) {
-  let maxH = 0;
-  for (let i = 0; i < w * h; i++) if (harris[i] > maxH) maxH = harris[i];
-  if (maxH === 0) return 0;
-  const threshold = maxH * 0.05;
-  let count = 0;
-  for (let i = 0; i < w * h; i++) if (harris[i] > threshold) count++;
-  return Math.max(0, Math.round(count / 9)); // /9 approximates NMS suppression
+/*
+ * Distribution analysis — combines three spatial metrics into a 0–25 score.
+ *
+ * 1. Grid score:     6×6 grid, counts cells where the MEAN density exceeds a
+ *                    threshold. Mean (not max) prevents a single strong pixel
+ *                    from falsely marking an otherwise empty cell as covered.
+ *
+ * 2. Coverage score: fraction of the total image area with trackMap > 0.10.
+ *                    Penalizes images where features cluster in a small zone.
+ *
+ * 3. Edge score:     mean density in the 15% border ring. AR trackers need
+ *                    features near the edges to compute stable pose.
+ */
+function analyzeDistribution(trackMap, w, h) {
+  // 1 — Grid coverage (6×6)
+  const GRID = 6;
+  const cw = w / GRID, ch = h / GRID;
+  let goodCells = 0;
+
+  for (let gy = 0; gy < GRID; gy++) {
+    for (let gx = 0; gx < GRID; gx++) {
+      let sum = 0, count = 0;
+      const x0 = Math.floor(gx * cw), x1 = Math.floor((gx + 1) * cw);
+      const y0 = Math.floor(gy * ch), y1 = Math.floor((gy + 1) * ch);
+      for (let y = y0; y < y1; y++)
+        for (let x = x0; x < x1; x++) { sum += trackMap[y * w + x]; count++; }
+      if (count > 0 && sum / count > 0.18) goodCells++;
+    }
+  }
+  const totalCells  = GRID * GRID;
+  const gridScore   = goodCells / totalCells;  // 0–1
+
+  // 2 — Pixel coverage (fraction of image with meaningful density)
+  let coveredPx = 0;
+  for (let i = 0; i < w * h; i++) if (trackMap[i] > 0.10) coveredPx++;
+  const coverageRatio  = coveredPx / (w * h);
+  const coverageScore  = Math.min(1, coverageRatio / 0.50);  // 50% = full score
+
+  // 3 — Edge/border strip coverage (15% ring from each edge)
+  const bw = Math.max(1, Math.round(w * 0.15));
+  const bh = Math.max(1, Math.round(h * 0.15));
+  let edgeSum = 0, edgeCount = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (y < bh || y >= h - bh || x < bw || x >= w - bw) {
+        edgeSum += trackMap[y * w + x];
+        edgeCount++;
+      }
+    }
+  }
+  const edgeMean  = edgeCount > 0 ? edgeSum / edgeCount : 0;
+  const edgeScore = Math.min(1, edgeMean / 0.25);  // mean 0.25 in border ring = full score
+
+  const combined = 0.40 * gridScore + 0.35 * coverageScore + 0.25 * edgeScore;
+
+  return {
+    score: 25 * combined,
+    gridScore,
+    coverageScore,
+    edgeScore,
+    coverageRatio,
+    goodCells,
+    totalCells,
+  };
+}
+
+/*
+ * Coverage penalty multiplier applied to the total score.
+ * An image with only 15% of its area covered gets a 45% penalty.
+ * No penalty once coverage reaches 45%.
+ */
+function computeCoveragePenalty(coverageRatio) {
+  if (coverageRatio >= 0.45) return 1.0;
+  if (coverageRatio <= 0.15) return 0.55;
+  return 0.55 + ((coverageRatio - 0.15) / 0.30) * 0.45;
 }
 
 /* ════════════════════════════════════════════════════════════════
    HEATMAP CANVAS
    Stores original ImageData + overlay canvas as properties
    so renderCanvas can compose them at any opacity.
+   Colormap: Blue (low) → Yellow (medium) → Red (high/good)
    ════════════════════════════════════════════════════════════════ */
-function jetColor(t) {
-  return [
-    clamp01(1.5 - Math.abs(4*t - 3)) * 255,
-    clamp01(1.5 - Math.abs(4*t - 2)) * 255,
-    clamp01(1.5 - Math.abs(4*t - 1)) * 255,
-  ];
+function featureDensityColor(t) {
+  let r, g, b;
+  if (t < 0.5) {
+    const s = t * 2;
+    r = Math.round(59  + s * (234 - 59));
+    g = Math.round(130 + s * (179 - 130));
+    b = Math.round(246 + s * (8   - 246));
+  } else {
+    const s = (t - 0.5) * 2;
+    r = Math.round(234 + s * (239 - 234));
+    g = Math.round(179 + s * (68  - 179));
+    b = Math.round(8   + s * (68  - 8));
+  }
+  return [r, g, b];
 }
 
-function buildHeatmapCanvas(imageData, trackMap, w, h) {
+function buildHeatmapCanvas(imageData, trackMap, keypoints, w, h) {
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  ctx.putImageData(imageData, 0, 0);
 
-  const overlayData = ctx.createImageData(w, h);
+  // Overlay: feature density colormap
+  const overlayData = new ImageData(w, h);
   for (let i = 0; i < w * h; i++) {
     const t = trackMap[i];
-    const [r, g, b] = jetColor(t);
+    const [r, g, b] = featureDensityColor(t);
     overlayData.data[i*4]   = r;
     overlayData.data[i*4+1] = g;
     overlayData.data[i*4+2] = b;
-    overlayData.data[i*4+3] = t > 0.05 ? Math.min(255, t * 1.4 * 255) : 0;
+    overlayData.data[i*4+3] = t > 0.04 ? Math.min(215, Math.round((0.25 + t * 0.75) * 215)) : 0;
   }
-
   const overlayCanvas = document.createElement('canvas');
   overlayCanvas.width = w; overlayCanvas.height = h;
   overlayCanvas.getContext('2d').putImageData(overlayData, 0, 0);
 
+  // Keypoints layer: dark outer ring + white dot
+  const kpCanvas = document.createElement('canvas');
+  kpCanvas.width = w; kpCanvas.height = h;
+  const kpCtx = kpCanvas.getContext('2d');
+  keypoints.forEach(({ x, y, strength }) => {
+    const r = Math.max(2, Math.round(2 + strength * 2));
+    kpCtx.beginPath();
+    kpCtx.arc(x, y, r + 1, 0, Math.PI * 2);
+    kpCtx.fillStyle = 'rgba(0,0,0,0.45)';
+    kpCtx.fill();
+    kpCtx.beginPath();
+    kpCtx.arc(x, y, r, 0, Math.PI * 2);
+    kpCtx.fillStyle = '#ffffff';
+    kpCtx.fill();
+  });
+
   canvas._overlay   = overlayCanvas;
+  canvas._kpCanvas  = kpCanvas;
   canvas._imageData = imageData;
-  return canvas;
-}
-
-/* ════════════════════════════════════════════════════════════════
-   IMPROVED IMAGE  — unsharp mask + per-channel contrast stretch
-   ════════════════════════════════════════════════════════════════ */
-function buildImprovedCanvas(imageData, w, h) {
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-
-  const src = imageData.data;
-  const out = ctx.createImageData(w, h);
-  const d   = out.data;
-
-  const R = new Float32Array(w * h);
-  const G = new Float32Array(w * h);
-  const B = new Float32Array(w * h);
-  for (let i = 0; i < w * h; i++) { R[i] = src[i*4]; G[i] = src[i*4+1]; B[i] = src[i*4+2]; }
-
-  const sigma = 1.2, amount = 0.65;
-  const bR = gaussBlur(R, w, h, sigma);
-  const bG = gaussBlur(G, w, h, sigma);
-  const bB = gaussBlur(B, w, h, sigma);
-
-  // First pass: find range after unsharp mask for contrast stretching
-  let minR=255, maxR=0, minG=255, maxG=0, minB=255, maxB=0;
-  for (let i = 0; i < w * h; i++) {
-    const sr = clamp(R[i] + amount * (R[i] - bR[i]), 0, 255);
-    const sg = clamp(G[i] + amount * (G[i] - bG[i]), 0, 255);
-    const sb = clamp(B[i] + amount * (B[i] - bB[i]), 0, 255);
-    if (sr < minR) minR = sr; if (sr > maxR) maxR = sr;
-    if (sg < minG) minG = sg; if (sg > maxG) maxG = sg;
-    if (sb < minB) minB = sb; if (sb > maxB) maxB = sb;
-  }
-
-  const stretch = (v, mn, mx) => (mx - mn) > 10 ? (v - mn) / (mx - mn) * 255 : v;
-
-  // Second pass: apply + stretch
-  for (let i = 0; i < w * h; i++) {
-    d[i*4]   = Math.round(stretch(clamp(R[i] + amount*(R[i]-bR[i]), 0, 255), minR, maxR));
-    d[i*4+1] = Math.round(stretch(clamp(G[i] + amount*(G[i]-bG[i]), 0, 255), minG, maxG));
-    d[i*4+2] = Math.round(stretch(clamp(B[i] + amount*(B[i]-bB[i]), 0, 255), minB, maxB));
-    d[i*4+3] = src[i*4+3];
-  }
-
-  ctx.putImageData(out, 0, 0);
   return canvas;
 }
 
@@ -445,16 +500,11 @@ function displayResults(scores) {
   updateMetrics(scores);
   updateDiagnosis(scores);
   updateRecommendations(scores);
-
-  state.currentMode = 'heatmap';
-  syncTabs('heatmap');
   document.getElementById('heatLegend').style.display = 'flex';
-  renderCanvas('heatmap');
-
+  renderCanvas();
   showScreen('results');
 }
 
-/* Score ring — animates via CSS transition on stroke-dasharray */
 function updateGauge(total) {
   const arc   = document.getElementById('scoreArc');
   const color = scoreColor(total);
@@ -470,7 +520,6 @@ function updateGauge(total) {
   labelEl.style.color = color;
 }
 
-/* Keypoint counter + quality subtitle */
 function updateKeypoints(scores) {
   document.getElementById('kpCount').textContent = scores.kp.toLocaleString('es');
   const q = scores.features / 25;
@@ -481,11 +530,9 @@ function updateKeypoints(scores) {
   document.getElementById('kpSub').textContent = sub;
 }
 
-/* Three metric bars: Distribución, Contraste, Textura/bordes */
 function updateMetrics(scores) {
   setBar('barDist',     'valDist',     scores.distribution);
   setBar('barContrast', 'valContrast', scores.contrast);
-  // Texture = blend of sharpness (edge quality) + feature density
   setBar('barTexture',  'valTexture',  (scores.sharpness + scores.features) / 2);
 }
 
@@ -505,7 +552,11 @@ function metricColor(pct) {
   return '#ef4444';
 }
 
-/* Diagnosis badge + explanatory text */
+/* ════════════════════════════════════════════════════════════════
+   DIAGNOSIS
+   Structural problems (concentration, empty areas, weak borders)
+   take priority over the generic score-range messages.
+   ════════════════════════════════════════════════════════════════ */
 function updateDiagnosis(scores) {
   const { badge, cls, text } = getDiagnosis(scores);
   const el = document.getElementById('diagBadge');
@@ -514,24 +565,52 @@ function updateDiagnosis(scores) {
   document.getElementById('diagText').textContent = text;
 }
 
-function getDiagnosis({ total }) {
+function getDiagnosis(scores) {
+  const { total, coverageRatio, gridScore, edgeScore, goodCells, totalCells } = scores;
+  const gridCoverage = goodCells / totalCells;
+
+  // Concentrated information / large empty areas
+  if (coverageRatio < 0.25 || gridCoverage < 0.30) {
+    const cls = total >= 50 ? 'average' : 'poor';
+    return {
+      badge: total >= 50 ? 'Regular' : 'Mala',
+      cls,
+      text: 'La información visual está concentrada en una zona pequeña de la imagen. '
+          + 'Grandes áreas sin textura pueden afectar gravemente la estabilidad del '
+          + 'tracking AR, especialmente cuando la cámara se mueve o el marcador '
+          + 'está parcialmente visible.',
+    };
+  }
+
+  // Weak borders
+  if (edgeScore < 0.30) {
+    const isBorderGood = total >= 60;
+    return {
+      badge: isBorderGood ? 'Buena' : 'Regular',
+      cls:   isBorderGood ? 'good'  : 'average',
+      text: 'Los bordes de la imagen tienen baja densidad de información visual. '
+          + 'Los sistemas AR necesitan features en toda la superficie —incluyendo '
+          + 'los bordes— para calcular la posición y orientación del marcador con precisión.',
+    };
+  }
+
+  // Generic score-based messages
   if (total >= 80) return {
     badge: 'Excelente', cls: 'excellent',
-    text: 'Esta imagen es un marcador AR de alta calidad. Tiene excelente nitidez, '
-        + 'puntos de tracking bien distribuidos y buen contraste. Los sistemas de '
-        + 'WebAR la detectarán de forma rápida y estable.',
+    text: 'Imagen de alta calidad para AR tracking. Tiene buena densidad de features, '
+        + 'distribución equilibrada en toda la superficie y buen contraste. '
+        + 'Los sistemas de WebAR la detectarán de forma rápida y estable.',
   };
   if (total >= 65) return {
     badge: 'Buena', cls: 'good',
     text: 'Buena imagen para tracking AR. Funcionará correctamente en la mayoría de '
-        + 'condiciones. Hay pequeñas áreas de mejora, pero no son críticas para el '
-        + 'funcionamiento básico.',
+        + 'condiciones. La distribución de features es adecuada, con margen menor de mejora.',
   };
   if (total >= 45) return {
     badge: 'Regular', cls: 'average',
     text: 'La imagen puede funcionar como marcador pero con limitaciones. El tracking '
-        + 'puede ser inestable con iluminación cambiante o desde distancias mayores. '
-        + 'Se recomienda aplicar las mejoras sugeridas.',
+        + 'puede ser inestable con iluminación variable o desde distancias mayores. '
+        + 'Aplica las mejoras sugeridas para mayor estabilidad.',
   };
   if (total >= 25) return {
     badge: 'Mala', cls: 'poor',
@@ -542,12 +621,14 @@ function getDiagnosis({ total }) {
   return {
     badge: 'Muy mala', cls: 'poor',
     text: 'Esta imagen no es apta para tracking AR. Carece de las características '
-        + 'visuales mínimas que los algoritmos necesitan. Usa una imagen con más '
-        + 'texturas, bordes nítidos y zonas de alto contraste.',
+        + 'visuales mínimas necesarias. Usa una imagen con más texturas, bordes '
+        + 'nítidos y zonas de alto contraste distribuidas por toda la superficie.',
   };
 }
 
-/* Actionable recommendations based on individual scores */
+/* ════════════════════════════════════════════════════════════════
+   RECOMMENDATIONS
+   ════════════════════════════════════════════════════════════════ */
 function updateRecommendations(scores) {
   const recs = getRecommendations(scores);
   const ul   = document.getElementById('recoList');
@@ -571,22 +652,68 @@ function getRecommendations(scores) {
   const pF = scores.features     / 25 * 100;
   const pD = scores.distribution / 25 * 100;
   const pC = scores.contrast     / 25 * 100;
+  const { coverageRatio, gridScore, edgeScore, goodCells, totalCells } = scores;
+  const gridCoverage = goodCells / totalCells;
 
+  // Coverage / empty areas
+  if (coverageRatio < 0.25) {
+    recs.push(
+      'Más del ' + Math.round((1 - coverageRatio) * 100) + '% de la imagen tiene muy baja '
+      + 'densidad de información. Añade textura, patrones o detalles en las zonas vacías '
+      + 'para cubrir la superficie completa.'
+    );
+  } else if (coverageRatio < 0.40) {
+    recs.push(
+      'Grandes áreas sin textura pueden afectar el tracking. Distribuye el contenido '
+      + 'visual por toda la imagen, no solo en el centro o en una zona concreta.'
+    );
+  }
+
+  // Grid concentration
+  if (gridCoverage < 0.35) {
+    recs.push(
+      'La información visual está concentrada en pocas zonas ('
+      + goodCells + ' de ' + totalCells + ' sectores con buena densidad). '
+      + 'Un marcador ideal llena uniformemente toda su superficie.'
+    );
+  } else if (gridCoverage < 0.55) {
+    recs.push(
+      'Varios sectores de la imagen tienen baja densidad de features. '
+      + 'Intenta llenar las zonas más vacías con detalles visuales adicionales.'
+    );
+  }
+
+  // Edge quality
+  if (edgeScore < 0.30) {
+    recs.push(
+      'Los bordes de la imagen tienen poca información visual. Agrega elementos '
+      + 'cerca de los bordes y esquinas — son críticos para que el tracker '
+      + 'calcule la orientación del marcador con precisión.'
+    );
+  } else if (edgeScore < 0.50) {
+    recs.push(
+      'Refuerza los bordes con más detalles visuales para mejorar la '
+      + 'estabilidad del tracking en movimiento.'
+    );
+  }
+
+  // Sharpness / texture
   if (pS < 50)
     recs.push('Usa una imagen más nítida. Evita fotos desenfocadas o con motion blur. La versión "Mejorada" adjunta aplica un filtro de enfoque automático.');
   else if (pS < 75)
     recs.push('La nitidez es aceptable pero puede mejorar. Fotografía con buena iluminación y sin movimiento de cámara.');
 
+  // Feature density
   if (pF < 40)
     recs.push('Agrega más detalles visuales: texto, líneas irregulares, patrones asimétricos o fotografías con mucha textura. Las zonas de color sólido son invisibles para el tracker.');
   else if (pF < 65)
     recs.push('Enriquece la imagen con más detalles finos. Bordes, esquinas y texturas variadas mejoran la detección.');
 
-  if (pD < 50)
-    recs.push('Los puntos de tracking están concentrados en pocas zonas. Distribuye el contenido visual por toda la imagen, incluyendo esquinas y bordes.');
-  else if (pD < 70)
-    recs.push('Coloca elementos de interés también en los bordes y esquinas de la imagen para mejorar la distribución.');
+  // Distribution bar (only if coverage is acceptable, avoiding duplicate messages)
+  if (pD < 50 && coverageRatio >= 0.40)
+    recs.push('La distribución general puede mejorar. Asegúrate de que los puntos de tracking se extiendan por toda la imagen, incluyendo esquinas.');
 
+  // Contrast
   if (pC < 40)
     recs.push('El contraste es muy bajo. Aumenta la diferencia entre zonas claras y oscuras. Evita fondos planos o colores muy similares.');
   else if (pC < 60)
@@ -601,73 +728,17 @@ function getRecommendations(scores) {
 /* ════════════════════════════════════════════════════════════════
    CANVAS RENDERER
    ════════════════════════════════════════════════════════════════ */
-function renderCanvas(mode) {
+function renderCanvas() {
   const canvas = document.getElementById('displayCanvas');
   const ctx    = canvas.getContext('2d');
   const src    = state.heatmapCanvas;
   if (!src) return;
-
-  const iw = src.width, ih = src.height;
-
-  if (mode === 'original') {
-    canvas.width = iw; canvas.height = ih;
-    ctx.putImageData(src._imageData, 0, 0);
-
-  } else if (mode === 'heatmap') {
-    canvas.width = iw; canvas.height = ih;
-    ctx.putImageData(src._imageData, 0, 0);
-    ctx.globalAlpha = state.opacity;
-    ctx.drawImage(src._overlay, 0, 0);
-    ctx.globalAlpha = 1;
-
-  } else if (mode === 'improved') {
-    // Side-by-side comparison: original | divider | improved
-    const gap = 6;
-    canvas.width  = iw * 2 + gap;
-    canvas.height = ih;
-
-    ctx.putImageData(src._imageData, 0, 0);
-
-    // Accent-colored divider
-    ctx.fillStyle = 'rgba(56,189,248,0.6)';
-    ctx.fillRect(iw + 1, 0, gap - 2, ih);
-
-    ctx.drawImage(state.improvedCanvas, iw + gap, 0);
-
-    // Labels
-    const labelH = 22, labelPad = 8;
-    ctx.font = 'bold 11px "Segoe UI", system-ui, sans-serif';
-
-    ['Original', 'Mejorada'].forEach((label, idx) => {
-      const offsetX = idx === 0 ? 0 : iw + gap;
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(offsetX + labelPad, ih - labelH - labelPad, tw + 16, labelH);
-      ctx.fillStyle = '#e2f4ff';
-      ctx.fillText(label, offsetX + labelPad + 8, ih - labelPad - 7);
-    });
-  }
-}
-
-/* ════════════════════════════════════════════════════════════════
-   TABS
-   ════════════════════════════════════════════════════════════════ */
-function setupTabs() {
-  document.querySelectorAll('.vtab').forEach(btn =>
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode;
-      state.currentMode = mode;
-      syncTabs(mode);
-      renderCanvas(mode);
-      document.getElementById('heatLegend').style.display = mode === 'heatmap' ? 'flex' : 'none';
-    })
-  );
-}
-
-function syncTabs(active) {
-  document.querySelectorAll('.vtab').forEach(b =>
-    b.classList.toggle('active', b.dataset.mode === active)
-  );
+  canvas.width = src.width; canvas.height = src.height;
+  ctx.putImageData(src._imageData, 0, 0);
+  ctx.globalAlpha = state.opacity;
+  ctx.drawImage(src._overlay, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.drawImage(src._kpCanvas, 0, 0);
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -676,18 +747,8 @@ function syncTabs(active) {
 function setupDownloads() {
   document.getElementById('btnDlHeatmap').addEventListener('click', () => {
     if (!state.heatmapCanvas) return;
-    // Ensure heatmap is rendered to displayCanvas at current opacity
-    if (state.currentMode !== 'heatmap') {
-      state.currentMode = 'heatmap';
-      syncTabs('heatmap');
-      renderCanvas('heatmap');
-    }
-    downloadCanvas(document.getElementById('displayCanvas'), 'marker-heatmap.png');
-  });
-
-  document.getElementById('btnDlImproved').addEventListener('click', () => {
-    if (!state.improvedCanvas) return;
-    downloadCanvas(state.improvedCanvas, 'marker-improved.jpg', 'image/jpeg', 0.92);
+    renderCanvas();
+    downloadCanvas(document.getElementById('displayCanvas'), 'marker-feature-density.png');
   });
 }
 
